@@ -83,6 +83,7 @@ class LlavaVid(lmms):
         torch_dtype: Optional[Union[str, torch.dtype]] = "float16",
         device: Optional[str] = "cuda:0",
         batch_size: Optional[Union[int, str]] = 1,
+        model_name: Optional[str] = None,
         attn_implementation=(
             "sdpa" if torch.__version__ >= "2.1.2" else "eager"
         ),  # inference implementation for attention, can be "sdpa", "eager", "flash_attention_2". Seems FA2 is not effective during inference: https://discuss.huggingface.co/t/flash-attention-has-no-effect-on-inference/73453/5
@@ -124,7 +125,8 @@ class LlavaVid(lmms):
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
         self.pretrained = pretrained
-        self.model_name = get_model_name_from_path(pretrained)
+        ## wpq: allows setting of `model_name`
+        self.model_name = model_name if model_name is not None else get_model_name_from_path(pretrained)
         self.video_decode_backend = video_decode_backend
         # self._config = AutoConfig.from_pretrained(self.pretrained)
         self.overwrite = overwrite
@@ -309,6 +311,8 @@ class LlavaVid(lmms):
         return video
 
     def load_video(self, video_path, max_frames_num, fps, force_sample=False):
+        """ force_sample=True forces the function to uniformly sample frames from the video 
+            regardless whether the number of frames exceeds `max_frames_num` or not. """
         if max_frames_num == 0:
             return np.zeros((1, 336, 336, 3))
         vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
@@ -442,6 +446,7 @@ class LlavaVid(lmms):
                         frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
                         video = [visuals[i] for i in frame_idx]
 
+                # (B, H, W, 3) -> (B, 3, H, W) where H,W potentially cropped.
                 video = self._image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda()
                 if self.torch_dtype == "bfloat16":
                     video = video.bfloat16()
@@ -498,6 +503,7 @@ class LlavaVid(lmms):
                 gen_kwargs["top_p"] = None
             if "num_beams" not in gen_kwargs:
                 gen_kwargs["num_beams"] = 1
+
 
             # import pdb;pdb.set_trace()
             with torch.inference_mode():

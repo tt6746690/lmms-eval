@@ -124,7 +124,8 @@ def simple_parse_args_string(args_string):
     if not args_string:
         return {}
     arg_list = [arg for arg in args_string.split(",") if arg]
-    args_dict = {k: handle_arg_string(v) for k, v in [arg.split("=") for arg in arg_list]}
+    ## wpq: handle cases `output_dir=/path/to/a=b_c=d` -> ['output_dir', '/path/to/a=b_c=d']
+    args_dict = {k: handle_arg_string(v) for k, v in [arg.split("=", 1) for arg in arg_list]}
     return args_dict
 
 
