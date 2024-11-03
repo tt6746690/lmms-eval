@@ -1,5 +1,6 @@
 import math
 import os
+import copy
 from datetime import timedelta
 from typing import List, Optional, Tuple, Union
 
@@ -185,6 +186,11 @@ class LlavaVid(lmms):
             if "qwen" in self._tokenizer.name_or_path.lower():
                 print("Setting pad token to bos token for qwen model.")
                 self._tokenizer.pad_token_id = 151643
+
+        ## wpq: set default `pad_token_id` to prevent warning
+        #       Setting `pad_token_id` to `eos_token_id`:128001 for open-end generation.
+        if not self._model.generation_config.pad_token_id:
+            self._model.generation_config.pad_token_id = self._model.generation_config.eos_token_id
 
         self.model.eval()
         if tie_weights:
@@ -472,11 +478,14 @@ class LlavaVid(lmms):
             else:
                 qs = DEFAULT_IMAGE_TOKEN * len(videos) + "\n" + qs
 
+            ## don't do deep copy since we don't want to copy a tokenizer for every example. 
+            #     currently just keep a reference to a single tokenizer.
             # This is much safer for llama3, as we now have some object type in it
-            if "llama_3" in self.conv_template:
-                conv = copy.deepcopy(conv_templates[self.conv_template])
-            else:
-                conv = conv_templates[self.conv_template].copy()
+            # if "llama_3" in self.conv_template:
+            #     conv = copy.deepcopy(conv_templates[self.conv_template])
+            # else:
+            #     conv = conv_templates[self.conv_template].copy()
+            conv = conv_templates[self.conv_template].copy()
 
             conv.append_message(conv.roles[0], qs)
             conv.append_message(conv.roles[1], None)
@@ -484,8 +493,10 @@ class LlavaVid(lmms):
 
             input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
             pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
-            if "llama_3" in self.conv_template:
-                pad_token_ids = 0  # lmms-lab/llama3-llava-8b is trained on this pad token id. You may need to customize this for other models.
+
+            ## wpq: remove this, `pad_token_id` is set in `self.tokenizer`, don't need to overwrite here.
+            # if "llama_3" in self.conv_template:
+            #     pad_token_ids = 0  # lmms-lab/llama3-llava-8b is trained on this pad token id. You may need to customize this for other models.
             attention_masks = input_ids.ne(pad_token_ids).long().cuda()
 
             stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
