@@ -410,11 +410,12 @@ class LlavaVid(lmms):
                 new_list.append(j)
         return new_list
 
-    def generate_until(self, requests) -> List[str]:
-        res = []
-        pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
 
-        for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
+    def generate_until(self, requests) -> List[str]:
+
+        def load_data(args):
+            contexts, gen_kwargs, doc_to_visual, doc_id, task, split = args
+            error_msg = None
             # if self.task_dict[task][split][doc_id]["duration"] != "short":
             # # if doc_id != 112:
             #     # import pdb;pdb.set_trace()
@@ -426,7 +427,7 @@ class LlavaVid(lmms):
             visuals = doc_to_visual(self.task_dict[task][split][doc_id])
             # visuals = [visuals]
             # visuals = self.flatten(visuals)
-            videos = []
+            # videos = []
             try:
                 # for visual in visuals:
                 if len(visuals) == 1:
@@ -453,20 +454,120 @@ class LlavaVid(lmms):
                         video = [visuals[i] for i in frame_idx]
 
                 # (B, H, W, 3) -> (B, 3, H, W) where H,W potentially cropped.
-                video = self._image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda()
-                if self.torch_dtype == "bfloat16":
-                    video = video.bfloat16()
-                else:
-                    video = video.half()
-                videos.append(video)
+                video = self._image_processor.preprocess(video, return_tensors="pt")["pixel_values"]
+                # videos.append(video)
             except Exception as e:
-                # import pdb;pdb.set_trace()
+                # # import pdb;pdb.set_trace()
                 eval_logger.info(f"{e}")
                 eval_logger.info(f"Video {visuals} can not load, check the source")
                 video_path = "\n".join(visuals)
-                res.append(f"Video {video_path} can not load, check the source")
+                # res.append(f"Video {video_path} can not load, check the source")
+                # pbar.update(1)
+                # continue
+                error_msg = f"Video {video_path} can not load, check the source"
+                video = None
+                frame_time = None
+                video_time = None
+
+            output = {
+                'args': args,
+                'video': video,
+                'frame_time': frame_time,
+                'video_time': video_time,
+                'error_msg': error_msg,
+            }
+            return output
+
+
+        from rosemary import joblib_parallel_process
+
+        #  1 video: (64, 3, 384, 384) takes 2bytes/pixel -> 64*3*384*384*2 = 56mb
+        # 5k video: 64*3*384*384*2*5000 / 1000^3 = 283gb < 1.btb memory limit for a single node
+        examples = joblib_parallel_process(
+            fn=load_data,
+            iterable=[x.args for x in requests],
+            n_jobs=8, # total 8*8=64 < 96 cpus cores
+            prefer='threads',
+            use_tqdm='Pre-loading Videos',
+        )
+
+        res = []
+
+        pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
+
+        for example in examples:
+            contexts, gen_kwargs, doc_to_visual, doc_id, task, split = example['args']
+            video, frame_time, video_time = example['video'], example['frame_time'], example['video_time']
+            error_msg = example['error_msg']
+            ## cpu->gpu
+            video = video.to(self.device, non_blocking=True)
+            if self.torch_dtype == "bfloat16":
+                video = video.bfloat16()
+            else:
+                video = video.half()
+            videos = [video]
+
+            if error_msg is not None:
+                res.append(error_msg)
                 pbar.update(1)
                 continue
+
+        # pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
+
+
+        # for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
+        #     # if self.task_dict[task][split][doc_id]["duration"] != "short":
+        #     # # if doc_id != 112:
+        #     #     # import pdb;pdb.set_trace()
+        #     #     res.append("A")
+        #     #     pbar.update(1)
+        #     #     continue
+        #     # encode, pad, and truncate contexts for this batch
+        #     # import pdb;pdb.set_trace()
+        #     visuals = doc_to_visual(self.task_dict[task][split][doc_id])
+        #     # visuals = [visuals]
+        #     # visuals = self.flatten(visuals)
+        #     videos = []
+        #     try:
+        #         # for visual in visuals:
+        #         if len(visuals) == 1:
+        #             if self.video_decode_backend == "decord":
+        #                 video, frame_time, video_time = self.load_video(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample)
+        #             elif self.video_decode_backend == "pyav":
+        #                 video, frame_time, video_time = read_video_pyav(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample)
+        #             elif self.video_decode_backend == "image":
+        #                 video = self.load_image(visuals[0])
+        #         else:
+        #             if task == "seedbench":
+        #                 video = visuals
+        #                 frame_time = "1.00s"
+        #                 video_time = 1
+        #             elif "mvbench" in task:
+        #                 # video = visuals
+        #                 # Reference: https://github.com/jayleicn/TVQA/blob/dfb0e5fe4582efca574dfddfeafd1008db3b33ef/data/README.md?plain=1#L50C34-L50C60
+        #                 fps = 3
+        #                 video_time = len(visuals) / fps
+        #                 sampled_indices = np.linspace(0, len(visuals) - 1, self.max_frames_num, dtype=int)
+        #                 frame_idx = sampled_indices.tolist()
+        #                 frame_time = [i / fps for i in frame_idx]
+        #                 frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
+        #                 video = [visuals[i] for i in frame_idx]
+
+        #         # (B, H, W, 3) -> (B, 3, H, W) where H,W potentially cropped.
+        #         video = self._image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda()
+        #         if self.torch_dtype == "bfloat16":
+        #             video = video.bfloat16()
+        #         else:
+        #             video = video.half()
+        #         videos.append(video)
+        #     except Exception as e:
+        #         # import pdb;pdb.set_trace()
+        #         eval_logger.info(f"{e}")
+        #         eval_logger.info(f"Video {visuals} can not load, check the source")
+        #         video_path = "\n".join(visuals)
+        #         res.append(f"Video {video_path} can not load, check the source")
+        #         pbar.update(1)
+        #         continue
 
             qs = contexts
             # import pdb;pdb.set_trace()
