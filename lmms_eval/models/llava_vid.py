@@ -593,25 +593,25 @@ class LlavaVid(lmms):
         def collate_fn(batch):
             """Need a custom collate_fn because `args` contain bounded method which 
                 is not handled by `default_collate`. """
-            contexts = [item['contexts'] for item in batch]
-            gen_kwargs = [item['gen_kwargs'] for item in batch]
             videos = [item['video'] for item in batch]
-            frame_times = [item['frame_time'] for item in batch]
-            video_times = [item['video_time'] for item in batch]
-            error_msgs = [item['error_msg'] for item in batch]
             batch_dict = {
-                'contexts': contexts,  # Keep args as a list without collating
-                'gen_kwargs': gen_kwargs,  # Keep args as a list without collating
+                'contexts': [item['contexts'] for item in batch],
+                'gen_kwargs': [item['gen_kwargs'] for item in batch],
                 'video': torch.stack(videos) if videos[0] is not None else None,
-                'frame_time': frame_times,  # Keep args as a list without collating
-                'video_time': video_times,  # Keep args as a list without collating
-                'error_msg': error_msgs,    # Keep args as a list without collating
+                'frame_time': [item['frame_time'] for item in batch],
+                'video_time': [item['video_time'] for item in batch],
+                'error_msg': [item['error_msg'] for item in batch],
             }
             return batch_dict
 
         dataloader = torch.utils.data.DataLoader(
-            dataset, batch_size=1, num_workers=8, pin_memory=True, prefetch_factor=6,
-    collate_fn=collate_fn)
+            dataset,
+            batch_size=1, 
+            num_workers=8, 
+            pin_memory=True, 
+            prefetch_factor=6,
+            collate_fn=collate_fn,
+        )
 
         for batch in dataloader:
             contexts = batch['contexts'][0] if batch['contexts'] is not None else None
