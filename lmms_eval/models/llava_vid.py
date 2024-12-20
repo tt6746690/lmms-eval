@@ -534,6 +534,9 @@ class LlavaVid(lmms):
                 contexts, gen_kwargs, doc_to_visual, doc_id, task, split = request.args
                 error_msg = None
                 visuals = doc_to_visual(self.task_dict[task][split][doc_id])
+                # wpq: visuals should be a list but its not for 'temporalbench_long_qa'
+                if task.startswith('temporalbench'):
+                    visuals = [visuals]
                 try:
                     if len(visuals) == 1:
                         if self.video_decode_backend == "decord":
@@ -608,8 +611,9 @@ class LlavaVid(lmms):
             dataset,
             batch_size=1, 
             num_workers=8, 
-            pin_memory=True, 
             prefetch_factor=6,
+            # num_workers=0,  # 0 for debugging, also comment out `prefetch_factor`
+            pin_memory=True, 
             collate_fn=collate_fn,
         )
 
